@@ -1,16 +1,16 @@
 {
   "files": {
-    "main.css": "/tronmachine/static/css/main.10a94f7a.css",
-    "main.js": "/tronmachine/static/js/main.bd277646.js",
+    "main.css": "/tronmachine/static/css/main.820f7327.css",
+    "main.js": "/tronmachine/static/js/main.8f83fd45.js",
     "static/js/453.1c41f2ec.chunk.js": "/tronmachine/static/js/453.1c41f2ec.chunk.js",
     "static/media/uwcrest.png": "/tronmachine/static/media/uwcrest.ff2346bb4a89180841b9.png",
     "index.html": "/tronmachine/index.html",
-    "main.10a94f7a.css.map": "/tronmachine/static/css/main.10a94f7a.css.map",
-    "main.bd277646.js.map": "/tronmachine/static/js/main.bd277646.js.map",
+    "main.820f7327.css.map": "/tronmachine/static/css/main.820f7327.css.map",
+    "main.8f83fd45.js.map": "/tronmachine/static/js/main.8f83fd45.js.map",
     "453.1c41f2ec.chunk.js.map": "/tronmachine/static/js/453.1c41f2ec.chunk.js.map"
   },
   "entrypoints": [
-    "static/css/main.10a94f7a.css",
-    "static/js/main.bd277646.js"
+    "static/css/main.820f7327.css",
+    "static/js/main.8f83fd45.js"
   ]
 }
