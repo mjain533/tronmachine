@@ -1,0 +1,6 @@
+Flask
+czifile
+imageio
+numpy
+werkzeug
+aicspylibczi

@@ -1,0 +1,82 @@
+.czi-root {
+  min-height: 70vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 16px;
+}
+
+.czi-card {
+  width: 780px;
+  max-width: 95%;
+  background: white;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 8px 20px rgba(0,0,0,0.12);
+}
+
+.dropzone {
+  border: 2px dashed #ddd;
+  padding: 28px;
+  text-align: center;
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+
+.browse-label input[type="file"] {
+  display: none;
+}
+
+.browse-label {
+  display: inline-block;
+  margin-top: 8px;
+  background: #c5050c;
+  color: white;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.file-list { margin-top: 12px; }
+.file-row { display:flex; align-items:center; justify-content:space-between; padding:8px 10px; border-radius:6px; background:#fafafa; margin-bottom:6px; }
+.file-meta { display:flex; gap:12px; align-items:center; }
+.file-name { font-weight:600; }
+.file-size { color:#666; font-size:0.9rem; }
+.file-remove { background:transparent; border:none; color:#c5050c; cursor:pointer; }
+
+.czi-actions { display:flex; gap:8px; margin-top:14px; justify-content:flex-end; }
+.btn-primary { background:#c5050c; color:white; border:none; padding:8px 14px; border-radius:6px; cursor:pointer; }
+.btn-secondary { background:#eee; border:none; padding:8px 12px; border-radius:6px; cursor:pointer; }
+.btn-link { background:transparent; border:none; color:#333; padding:8px 10px; cursor:pointer; }
+
+.czi-error { color:#a00; padding:8px 0; }
+.file-empty { color:#777; padding:8px 0; }
+
+/* Preview overlay */
+.preview-overlay {
+  position: fixed;
+  left: 0; top: 0; right: 0; bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.6);
+  z-index: 2000;
+}
+.preview-card {
+  width: 90%;
+  max-width: 900px;
+  max-height: 90%;
+  background: #fff;
+  border-radius: 8px;
+  padding: 12px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+  display: flex;
+  flex-direction: column;
+}
+.preview-header { display:flex; justify-content:space-between; align-items:center; padding-bottom:8px; border-bottom:1px solid #eee; }
+.preview-title { font-weight:700; }
+.preview-close { background:#eee; border:none; padding:6px 10px; border-radius:6px; cursor:pointer; }
+.preview-body { display:flex; align-items:center; justify-content:center; padding:8px; overflow:auto; }
+.preview-body img { max-width:100%; max-height:80vh; }
+.preview-loading { color:#555; }
+.preview-error { color:#a00; }
