@@ -4,3 +4,6 @@ imageio
 numpy
 werkzeug
 aicspylibczi
+Werkzeug
+opencv-python
+Pillow

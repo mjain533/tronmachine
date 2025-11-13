@@ -1,5 +1,7 @@
-import React, { useEffect, useState } from 'react';
-import './CziViewer.css';
+// CziViewer.jsx
+import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import "./CziViewer.css";
 
 function useIdFromPath() {
   const path = window.location.pathname;
@@ -7,162 +9,197 @@ function useIdFromPath() {
   return match ? match[1] : null;
 }
 
-export default function CziViewer({ navigate }) {
+export default function CziViewer() {
   const id = useIdFromPath();
+  const navigate = useNavigate();
   const [meta, setMeta] = useState(null);
   const [zIndex, setZIndex] = useState(0);
   const [channel, setChannel] = useState(0);
   const [sliceUrl, setSliceUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [keptSlices, setKeptSlices] = useState({ start: 0, end: 0 });
 
+  // fetch metadata
   useEffect(() => {
     if (!id) return;
-    const fetchMeta = async () => {
+    (async () => {
       setLoading(true);
       try {
+        console.debug("[viewer] fetching metadata for", id);
         const r = await fetch(`/api/metadata/${id}`);
-        if (!r.ok) throw new Error('Failed to fetch metadata');
+        if (!r.ok) throw new Error(`metadata ${r.status}`);
         const j = await r.json();
         setMeta(j);
         setZIndex(0);
-      } catch (err) { setError(err.message); }
-      setLoading(false);
-    };
-    fetchMeta();
+      } catch (err) {
+        console.error("[viewer] meta error", err);
+        setError(err.message || String(err));
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, [id]);
 
+  // fetch slice image (raw)
   useEffect(() => {
     if (!meta) return;
-    const fetchSlice = async () => {
+    let active = true;
+    (async () => {
       setLoading(true);
+      setError(null);
       try {
         const r = await fetch(`/api/slice/${id}?z=${zIndex}&c=${channel}`);
         if (!r.ok) {
-          // try to parse json error
-          let body = null;
-          try { body = await r.json(); } catch(e) { /* ignore */ }
-          const msg = body && body.error ? `${body.error}` : `Failed to fetch slice (${r.status})`;
-          throw new Error(msg);
+          const txt = await r.text().catch(() => null);
+          throw new Error(`slice fetch ${r.status} ${txt || ""}`);
         }
         const blob = await r.blob();
+        if (!active) return;
         const url = URL.createObjectURL(blob);
-        setSliceUrl(url);
-      } catch (err) { setError(err.message); }
+        setSliceUrl(prev => {
+          if (prev) URL.revokeObjectURL(prev);
+          return url;
+        });
+      } catch (err) {
+        console.error("[viewer] slice fetch error", err);
+        setError(err.message || String(err));
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+    return () => { active = false; };
+  }, [meta, zIndex, channel, id]);
+
+  // Preprocess batch (keeps slices saved on server)
+  async function startPreprocess() {
+    if (!meta) return alert("no metadata");
+    const start = Number(document.getElementById("sliceStart").value);
+    const end = Number(document.getElementById("sliceEnd").value);
+    const applyAll = document.getElementById("applyAll").checked;
+    if (!start || !end || start < 1 || end > meta.sizes.z || start > end) {
+      alert("Invalid slice range");
+      return;
+    }
+    try {
+      setLoading(true);
+      const r1 = await fetch("/api/slices/keep", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, keepRange: [start, end], applyAll }),
+      });
+      const j1 = await r1.json();
+      if (j1.error) throw new Error(j1.error);
+      setKeptSlices({ start, end });
+
+      const r2 = await fetch(`/api/preprocess/${id}/batch?c=${channel}`);
+      const j2 = await r2.json();
+      if (j2.error) throw new Error(j2.error);
+      alert(`Preprocessing complete for ${start}–${end}`);
+    } catch (err) {
+      console.error("[viewer] preprocess failed", err);
+      alert("Preprocess error: " + (err.message || err));
+    } finally {
       setLoading(false);
-    };
-    fetchSlice();
-    return () => { if (sliceUrl) URL.revokeObjectURL(sliceUrl); };
-  }, [meta, zIndex, channel]);
+    }
+  }
+
+  // Run analysis, wait for response, then navigate to /analysis/:id
+ async function runAnalysis() {
+  if (!keptSlices.start) {
+    alert("Please run preprocess first and set slice range.");
+    return;
+  }
+  try {
+    setLoading(true);
+    console.debug("[viewer] starting analyze");
+
+    // Call the Flask /api/analyze endpoint
+    const r = await fetch(
+      `/api/analyze/${id}?c=${channel}`
+    );
+    const j = await r.json();
+
+    if (r.ok && !j.error) {
+      console.debug("[viewer] analyze done", j);
+      // wait a short moment to allow server to flush files (helps race)
+      await new Promise(res => setTimeout(res, 300));
+
+      // navigate to AnalysisViewer
+      navigate(`/analysis/${id}`);
+    } else {
+      throw new Error(j.error || "analysis failed");
+    }
+  } catch (err) {
+    console.error("[viewer] analyze error", err);
+    alert("Analysis failed: " + (err.message || err));
+  } finally {
+    setLoading(false);
+  }
+}
+
 
   if (!id) return <div className="viewer-root">Invalid viewer id</div>;
 
   return (
     <div className="viewer-root">
       <div className="viewer-header">
-        <button onClick={() => navigate('/upload')}>Back</button>
+        <button onClick={() => window.location.href = "/upload"}>Back</button>
         <div className="viewer-title">CZI Viewer — {meta ? meta.filename : id}</div>
       </div>
-      <div className="viewer-body" style={{display:'flex',alignItems:'flex-start',justifyContent:'center',minHeight:'60vh',background:'#f7f7f7',borderRadius:8}}>
+
+      <div className="viewer-body" style={{ display: "flex", gap: 20 }}>
         {meta && (
-          <div className="slice-select-panel" style={{background:'#ddd',padding:16,borderRadius:8,width:270,minWidth:270,marginRight:24,marginTop:0}}>
-            <div style={{marginBottom:8}}>
-              <label style={{fontWeight:'bold'}}>Displaying:</label>
-              <input type="text" value={meta.filename} readOnly style={{marginLeft:8,width:120}} />
+          <div style={{ width: 270, padding: 16, background: "#ddd", borderRadius: 8 }}>
+            <div style={{ marginBottom: 8 }}>
+              <b>Displaying:</b>{" "}
+              <input type="text" value={meta.filename} readOnly style={{ width: 140 }} />
             </div>
-            <div style={{marginBottom:8}}>
-              <label style={{fontWeight:'bold'}}>Select Slices:</label>
-              <input type="number" min={1} max={meta.sizes.z} defaultValue={1} id="sliceStart" style={{width:50,marginLeft:8}} />
-              <span style={{margin:'0 8px'}}>thru</span>
-              <input type="number" min={1} max={meta.sizes.z} defaultValue={meta.sizes.z} id="sliceEnd" style={{width:50}} />
+
+            <div style={{ marginBottom: 8 }}>
+              <b>Select Slices:</b><br />
+              <input id="sliceStart" type="number" min={1} max={meta.sizes.z} defaultValue={1} style={{width:70}} />{" "}
+              thru{" "}
+              <input id="sliceEnd" type="number" min={1} max={meta.sizes.z} defaultValue={meta.sizes.z} style={{width:70}} />
             </div>
-            <div style={{marginBottom:8}}>
-              <input type="checkbox" id="applyAll" style={{marginRight:4}} />
-              <label htmlFor="applyAll">Apply to all (if possible)</label>
+
+            <div style={{ marginBottom: 8 }}>
+              <input id="applyAll" type="checkbox" /> <label htmlFor="applyAll">Apply to all</label>
             </div>
-            <button
-              style={{padding:'4px 18px',fontWeight:'bold',borderRadius:4,border:'1px solid #888',background:'#eee',cursor:'pointer'}}
-              onClick={async () => {
-                const start = parseInt(document.getElementById('sliceStart').value);
-                const end = parseInt(document.getElementById('sliceEnd').value);
-                const applyAll = document.getElementById('applyAll').checked;
-                if (isNaN(start) || isNaN(end) || start < 1 || end > meta.sizes.z || start > end) {
-                  alert('Please enter a valid slice range.');
-                  return;
-                }
-                // Send request to backend to delete unwanted slices
-                try {
-                  const r = await fetch(`/api/slices/keep`, {
-                    method: 'POST',
-                    headers: {'Content-Type':'application/json'},
-                    body: JSON.stringify({
-                      id,
-                      keepRange: [start, end],
-                      applyAll,
-                    })
-                  });
-                  if (!r.ok) throw new Error('Failed to update slices');
-                  alert('Slices updated!');
-                } catch (err) {
-                  alert('Error: ' + err.message);
-                }
-              }}
-            >Next</button>
+
+            <button onClick={startPreprocess} disabled={loading} style={{ display: "block", marginBottom: 8 }}>
+              Run Preprocess (batch)
+            </button>
+
+            <button onClick={runAnalysis} disabled={loading || !keptSlices.start} style={{ display: "block" }}>
+              Run Analysis → Open Analysis Viewer
+            </button>
           </div>
         )}
-        <div style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',maxHeight:"100vh"}}>
-          <div style={{width:'100%',height:'80vh',maxWidth:'100%',display:'flex',alignItems:'center',justifyContent:'center',position:'relative'}}>
-            {error && <div className="viewer-error">{error}</div>}
+
+        <div style={{ flex: 1 }}>
+          <div style={{ height: "70vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#fafafa", borderRadius: 8 }}>
             {loading && <div className="viewer-loading">Loading…</div>}
-            {!loading && sliceUrl && (
-              <img className="viewer-image" src={sliceUrl} alt={`z=${zIndex}`} style={{maxHeight:'80vh',maxWidth:'100%'}} />
-            )}
+            {error && <div style={{color:"red"}}>{error}</div>}
+            {!loading && sliceUrl && <img src={sliceUrl} alt={`z=${zIndex}`} style={{maxHeight:"70vh", maxWidth:"100%"}} />}
           </div>
+
           {meta && (
-            <div className="viewer-controls" style={{width:'100%',marginTop:16}}>
-              <label style={{marginRight:12, display:'flex', alignItems:'center', gap:8}}>
-                Slices:
-                <button
-                  style={{padding:'2px 8px', fontSize:'1.1em'}}
-                  disabled={zIndex <= 1}
-                  onClick={() => setZIndex(z => Math.max(0, z-2))}
-                >«</button>
-                <button
-                  style={{padding:'2px 8px', fontSize:'1.1em'}}
-                  disabled={zIndex <= 0}
-                  onClick={() => setZIndex(z => Math.max(0, z-1))}
-                >‹</button>
-                <input
-                  type="range"
-                  min={0}
-                  max={meta.sizes.z - 1}
-                  value={zIndex}
-                  onChange={e => setZIndex(Number(e.target.value))}
-                  style={{ verticalAlign: 'middle', margin: '0 8px', width:120 }}
-                />
-                <button
-                  style={{padding:'2px 8px', fontSize:'1.1em'}}
-                  disabled={zIndex >= meta.sizes.z - 1}
-                  onClick={() => setZIndex(z => Math.min(meta.sizes.z - 1, z+1))}
-                >›</button>
-                <button
-                  style={{padding:'2px 8px', fontSize:'1.1em'}}
-                  disabled={zIndex >= meta.sizes.z - 2}
-                  onClick={() => setZIndex(z => Math.min(meta.sizes.z - 1, z+2))}
-                >»</button>
-                <span style={{marginLeft:8}}>{zIndex + 1} / {meta.sizes.z}</span>
-              </label>
+            <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 12 }}>
+              <div>
+                <button onClick={() => setZIndex(z => Math.max(0, z - 1))} disabled={zIndex <= 0}>‹</button>
+                <input type="range" min={0} max={meta.sizes.z - 1} value={zIndex} onChange={e => setZIndex(Number(e.target.value))} />
+                <button onClick={() => setZIndex(z => Math.min(meta.sizes.z - 1, z + 1))} disabled={zIndex >= meta.sizes.z - 1}>›</button>
+                <span style={{marginLeft:8}}>{zIndex + 1}/{meta.sizes.z}</span>
+              </div>
+
               {meta.sizes.c > 1 && (
-                <label style={{marginLeft:12}}>
-                  Channel:
-                  <select value={channel} onChange={(e)=>{ setChannel(parseInt(e.target.value)); setZIndex(0); }}>
-                    {Array.from({length: meta.sizes.c}).map((_,i)=> {
-                      const channelNames = ['Green', 'Red', 'Blue', 'White'];
-                      const label = channelNames[i] || `Channel ${i+1}`;
-                      return <option key={i} value={i}>{label}</option>;
-                    })}
+                <div>
+                  Channel{" "}
+                  <select value={channel} onChange={e => { setChannel(Number(e.target.value)); setZIndex(0); }}>
+                    {Array.from({length: meta.sizes.c}).map((_,i)=> <option key={i} value={i}>Chan {i+1}</option>)}
                   </select>
-                </label>
+                </div>
               )}
             </div>
           )}

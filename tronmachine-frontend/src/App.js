@@ -1,22 +1,15 @@
+// src/App.js
 import './App.css';
-import React, { useEffect, useState } from 'react';
-import uwcrest from './uwcrest.png'; // Add crest image into src/
+import React from 'react';
+import uwcrest from './uwcrest.png';
 import PortalMain from './PortalMain';
 import CziUpload from './CziUpload';
 import CziViewer from './CziViewer';
+import AnalysisViewer from './AnalysisViewer';
+import { BrowserRouter as Router, Routes, Route, Link, useNavigate } from 'react-router-dom';
 
-function AppContent({ route, navigate }) {
-  if (route === '/portal') {
-    return <PortalMain navigate={navigate} />;
-  }
-
-  if (route === '/upload') {
-    return <CziUpload navigate={navigate} />;
-  }
-
-  if (route.startsWith('/viewer/')) {
-    return <CziViewer navigate={navigate} />;
-  }
+function Home() {
+  const navigate = useNavigate();
 
   return (
     <div className="App">
@@ -28,32 +21,33 @@ function AppContent({ route, navigate }) {
       <div className="App-right">
         <p>Exploring neuroscience and technology at UW–Madison</p>
         <div className="App-links">
-          <a href="https://dent.neuro.wisc.edu" target="_blank" rel="noopener noreferrer">
+          <a
+            href="https://dent.neuro.wisc.edu"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             Dent Lab Website
           </a>
-          <button className="link-button" onClick={() => navigate('/portal')}>Tron Machine Portal</button>
+          <button className="link-button" onClick={() => navigate('/portal')}>
+            Tron Machine Portal
+          </button>
         </div>
       </div>
     </div>
   );
 }
 
-function App() {
-  const [route, setRoute] = useState(window.location.pathname || '/');
-
-  useEffect(() => {
-    const onPop = () => setRoute(window.location.pathname);
-    window.addEventListener('popstate', onPop);
-    return () => window.removeEventListener('popstate', onPop);
-  }, []);
-
-  const navigate = (to) => {
-    if (to === window.location.pathname) return;
-    window.history.pushState({}, '', to);
-    setRoute(to);
-  };
-
-  return <AppContent route={route} navigate={navigate} />;
+export default function App() {
+  return (
+    <Router>
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/portal" element={<PortalMain />} />
+        <Route path="/upload" element={<CziUpload />} />
+        <Route path="/viewer/:id" element={<CziViewer />} />
+        <Route path="/analysis/:id" element={<AnalysisViewer />} />
+        <Route path="*" element={<Home />} />
+      </Routes>
+    </Router>
+  );
 }
-
-export default App;

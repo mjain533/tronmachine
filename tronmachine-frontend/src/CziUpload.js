@@ -1,5 +1,6 @@
 import React, { useCallback, useState, useRef } from 'react';
 import './CziUpload.css';
+import { useNavigate } from 'react-router-dom';
 
 function readableSize(bytes) {
   if (bytes === 0) return '0 B';
@@ -8,9 +9,10 @@ function readableSize(bytes) {
   return (bytes / Math.pow(1024, i)).toFixed(2) + ' ' + units[i];
 }
 
-export default function CziUpload({ navigate }) {
+export default function CziUpload() {
   const [files, setFiles] = useState([]);
   const [error, setError] = useState(null);
+  const navigate = useNavigate();
 
   const acceptExt = ['.czi'];
 
@@ -42,7 +44,7 @@ export default function CziUpload({ navigate }) {
 
   const onBrowse = (ev) => {
     handleFiles(ev.target.files);
-    ev.target.value = null; // reset
+    ev.target.value = null;
   };
 
   const removeAt = (idx) => setFiles(prev => prev.filter((_,i) => i!==idx));
@@ -51,11 +53,9 @@ export default function CziUpload({ navigate }) {
 
   const prepareUpload = () => {
     if (!files.length) { setError('No CZI files selected'); return; }
-    // For now we'll just show a count — integration with backend or processing pipeline goes here
     alert(`Preparing ${files.length} file(s) for upload:` + '\n' + files.map(f => `${f.name} (${readableSize(f.size)})`).join('\n'));
   };
 
-  // Upload selected file to server and open viewer
   const uploadAndOpen = async () => {
     if (!files.length) { setError('No CZI files selected'); return; }
     setError(null);
@@ -77,24 +77,21 @@ export default function CziUpload({ navigate }) {
     }
   };
 
-  // Preview modal state
+  // --- Preview section ---
   const [previewUrl, setPreviewUrl] = useState(null);
   const [previewName, setPreviewName] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState(null);
   const fileBeingPreviewed = useRef(null);
 
-  // Try to preview by letting the browser render (may fail for .czi). On error, attempt server-side conversion at /api/preview
   const openPreview = async (file) => {
     setPreviewError(null);
     setPreviewLoading(true);
     fileBeingPreviewed.current = file;
     setPreviewName(file.name);
 
-    // First attempt: object URL
     const url = URL.createObjectURL(file);
     setPreviewUrl(url);
-    // The image onError handler will trigger serverFallback if browser can't render it.
   };
 
   const closePreview = () => {
@@ -107,7 +104,6 @@ export default function CziUpload({ navigate }) {
   };
 
   const serverFallback = async () => {
-    // Try to send file to /api/preview as multipart/form-data; expect image/png blob back.
     const file = fileBeingPreviewed.current;
     if (!file) return;
     setPreviewLoading(true);
@@ -119,7 +115,6 @@ export default function CziUpload({ navigate }) {
       if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
       const blob = await resp.blob();
       const blobUrl = URL.createObjectURL(blob);
-      // revoke previous object url
       if (previewUrl) URL.revokeObjectURL(previewUrl);
       setPreviewUrl(blobUrl);
       setPreviewLoading(false);

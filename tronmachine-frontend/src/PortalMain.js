@@ -1,7 +1,10 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import './PortalMain.css';
 
-export default function PortalMain({ navigate }) {
+export default function PortalMain() {
+  const navigate = useNavigate();
+
   return (
     <div className="portal-root">
       <div className="portal-card">
@@ -15,7 +18,9 @@ export default function PortalMain({ navigate }) {
           </button>
         </div>
         <div className="portal-footer">
-          <button className="portal-link" onClick={() => navigate('/')}>Return to Home</button>
+          <button className="portal-link" onClick={() => navigate('/')}>
+            Return to Home
+          </button>
         </div>
       </div>
     </div>

@@ -13,18 +13,183 @@ from czifile import CziFile
 import imageio.v2 as imageio
 import numpy as np
 import traceback
+import cv2
+import numpy as np
+from skimage.filters import threshold_otsu, threshold_local
+from scipy.ndimage import gaussian_filter, binary_opening, binary_closing
+from skimage.measure import regionprops_table
+from scipy.ndimage import label
+from PIL import Image, ImageChops
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), 'uploads')
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app = Flask(__name__)
+# Store kept slices in memory (or you could persist to disk)
+kept_slices = {}
+@app.route('/api/analyze/<id>')
+def analyze(id):
+    c = int(request.args.get('c', 0))
 
+    # make sure slices were kept
+    if id not in kept_slices:
+        return jsonify({'error': 'No kept slices found'}), 400
+
+    start, end = kept_slices[id]['start'], kept_slices[id]['end']
+    slices = []
+
+    for z in range(start, end + 1):
+        path = os.path.join(UPLOAD_DIR, f"{id}_z{z}_c{c}_mask.png")
+        if not os.path.exists(path):
+            continue
+        img = imageio.imread(path)
+        slices.append(img)
+
+    if not slices:
+        return jsonify({'error': 'No preprocessed slices found'}), 400
+
+    # Combine slices vertically (or however you want)
+    combined = np.vstack(slices)
+    out_path = os.path.join(UPLOAD_DIR, f"{id}_analyze_combined_c{c}.png")
+    imageio.imwrite(out_path, combined)
+
+    return jsonify({'status': 'ok', 'combined_path': f"/api/analyze_img_combined/{id}/{c}"})
+
+@app.route('/api/analyze_img/<id>/<int:z>/<int:c>')
+def get_analyze_img(id, z, c):
+    try:
+        path = os.path.join(UPLOAD_DIR, f"{id}_z{z}_c{c}_analyze.png")
+        if not os.path.exists(path):
+            abort(404)
+        return send_file(path, mimetype='image/png')
+    except Exception as e:
+        tb = traceback.format_exc()
+        app.logger.error(f'analyze_img error: {tb}')
+        return jsonify({'error': str(e), 'trace': tb}), 500
+    
+@app.route('/api/slices/keep', methods=['POST'])
+def keep_slices():
+    data = request.get_json()
+    id = data.get('id')
+    keep_range = data.get('keepRange')  # [start, end]
+    apply_all = data.get('applyAll', False)
+
+    if not id or not keep_range or len(keep_range) != 2:
+        return jsonify({'error': 'Invalid request'}), 400
+
+    kept_slices[id] = {
+        'start': keep_range[0] - 1,  # convert to 0-index
+        'end': keep_range[1] - 1,
+        'apply_all': apply_all
+    }
+    return jsonify({'status': 'ok'})
+
+@app.route("/api/analyze_img_combined/<id>")
+def get_analyze_img_combined(id):
+    folder = os.path.join("analyzed_images", id)
+    if not os.path.exists(folder):
+        abort(404)
+
+    images = []
+    for fname in sorted(os.listdir(folder)):
+        if fname.endswith(".png"):
+            path = os.path.join(folder, fname)
+            img = Image.open(path).convert("RGBA")
+            images.append(img)
+
+    if not images:
+        abort(404)
+
+    combined = images[0].copy()
+    for img in images[1:]:
+        combined = Image.alpha_composite(combined, img)
+
+    output_path = os.path.join(folder, "combined_overlay.png")
+    combined.save(output_path)
+    return send_file(output_path, mimetype="image/png")
+
+
+@app.route('/api/preprocess/<id>/batch')
+def preprocess_batch(id):
+    path = os.path.join(UPLOAD_DIR, f"{id}.czi")
+    if not os.path.exists(path):
+        return 'Not found', 404
+
+    c = int(request.args.get('c', 0))
+    blur = request.args.get('blur', 'true').lower() == 'true'
+    thresh_mode = request.args.get('threshold', 'otsu')
+
+    # Get kept slice range
+    if id not in kept_slices:
+        return jsonify({'error': 'No kept slices found'}), 400
+
+    z_start = kept_slices[id]['start']
+    z_end = kept_slices[id]['end']
+
+    try:
+        with CziFile(path) as czi:
+            data = np.asarray(czi.asarray())
+            axes = czi.axes
+            shape = czi.shape
+            axis_idx = {a: i for i, a in enumerate(axes)}
+
+            for z in range(z_start, z_end + 1):
+                slicer = [0] * data.ndim
+                if 'Z' in axis_idx:
+                    slicer[axis_idx['Z']] = z
+                if 'C' in axis_idx:
+                    slicer[axis_idx['C']] = c
+                if 'Y' in axis_idx:
+                    slicer[axis_idx['Y']] = slice(None)
+                if 'X' in axis_idx:
+                    slicer[axis_idx['X']] = slice(None)
+
+                plane = np.squeeze(data[tuple(slicer)]).astype(np.float32)
+                pmin, pmax = plane.min(), plane.max()
+                if pmax > pmin:
+                    plane = (plane - pmin) / (pmax - pmin)
+                else:
+                    plane[:] = 0.0
+
+                if blur:
+                    plane = gaussian_filter(plane, sigma=1.0)
+
+                if thresh_mode == 'otsu':
+                    t = threshold_otsu(plane)
+                    mask = plane > t
+                elif thresh_mode == 'adaptive':
+                    local_thresh = threshold_local(plane, 35)
+                    mask = plane > local_thresh
+                else:
+                    try:
+                        t = float(thresh_mode)
+                        mask = plane > t
+                    except ValueError:
+                        mask = plane > 0.5
+
+                mask = binary_opening(mask, structure=np.ones((3,3)))
+                mask = binary_closing(mask, structure=np.ones((3,3)))
+
+                overlay = np.zeros((*mask.shape, 3), dtype=np.uint8)
+                overlay[..., 0] = (plane * 255).astype(np.uint8)
+                overlay[..., 1] = np.where(mask, 255, 0)
+
+                out_path = os.path.join(UPLOAD_DIR, f"{id}_z{z}_c{c}_mask.png")
+                imageio.imwrite(out_path, overlay)
+
+        return jsonify({'status': 'ok', 'processed_slices': list(range(z_start, z_end + 1))})
+    except Exception as e:
+        tb = traceback.format_exc()
+        app.logger.error(f'batch preprocess error: {tb}')
+        return jsonify({'error': str(e), 'trace': tb}), 500
+
+    
 @app.route('/api/upload', methods=['POST'])
 def upload():
     if 'file' not in request.files:
         return 'No file', 400
     f = request.files['file']
-    filename = secure_filename(f.filename)
+    filename = f.filename
     id = str(uuid.uuid4())
     dest = os.path.join(UPLOAD_DIR, f"{id}.czi")
     f.save(dest)
@@ -44,6 +209,7 @@ def metadata(id):
                 if hasattr(cz, 'get_shape'):
                     shapes = cz.get_shape()
                     z_count = int(shapes.get('Z', 1))
+                    
                     c_count = int(shapes.get('C', 1))
                     meta = {'filename': os.path.basename(path), 'sizes': {'z': z_count, 'c': c_count}, 'raw_shape': shapes}
                     return jsonify(meta)
@@ -98,20 +264,23 @@ def metadata(id):
             arr = czi.asarray()
             arr = np.asarray(arr)
             shape = arr.shape
-            # Heuristic: assume last two dims are Y,X. Z and C before them.
+            app.logger.info(f'Raw CZI shape: {shape}')
+            
+            # Look for dimension sizes that match expected patterns
             z_count = 1
             c_count = 1
-            if arr.ndim >= 3:
-                # try detection: if shape length >=4 then likely (C,Z,Y,X) or (Z,C,Y,X)
-                # we'll fallback to find axis with small size >1
-                for i,s in enumerate(shape[:-2]):
-                    if s > 1:
-                        # prefer first >1 as channel or z; we can't be certain
-                        if c_count == 1:
-                            c_count = int(s)
-                        else:
-                            z_count = int(s)
-            meta = {'filename': os.path.basename(path), 'sizes': {'z': z_count, 'c': c_count}, 'shape': shape}
+            
+            # Try to find dimensions matching expected sizes
+            if arr.ndim >= 4:
+                # Find the Z dimension - often around 12-50 slices
+                z_count = int (shape[5])
+                c_count = int (shape[4])
+        
+
+            meta = {'filename': os.path.basename(path), 
+                   'sizes': {'z': z_count, 'c': c_count}, 
+                   'shape': shape}
+            app.logger.info(f'Detected Z count: {z_count}, C count: {c_count}')
             return jsonify(meta)
     except Exception as e:
         tb = traceback.format_exc()
@@ -125,162 +294,72 @@ def slice_endpoint(id):
     path = os.path.join(UPLOAD_DIR, f"{id}.czi")
     if not os.path.exists(path):
         return 'Not found', 404
-    try:
-        if HAVE_AICS and AiCziFile is not None:
-            cz = AiCziFile(path)
-            # aics can extract plane by indexes; get dimensions from the file
-            try:
-                # Try to get shape information using available methods
-                if hasattr(cz, 'get_shape'):
-                    shapes = cz.get_shape()
-                    z_count = int(shapes.get('Z', 1))
-                    c_count = int(shapes.get('C', 1))
-                elif hasattr(cz, 'read_mosaic'):
-                    # Use read_mosaic to get dimensions
-                    sample = cz.read_mosaic()
-                    sample = np.asarray(sample)
-                    # Assume standard CZI format: (C, Z, Y, X) or similar
-                    if sample.ndim >= 3:
-                        z_count = sample.shape[1] if sample.ndim >= 4 else 1
-                        c_count = sample.shape[0] if sample.ndim >= 4 else 1
-                    else:
-                        z_count = 1
-                        c_count = 1
-                else:
-                    # Default fallback
-                    z_count = 1
-                    c_count = 1
-                
-                z = max(0, min(z, z_count-1))
-                c = max(0, min(c, c_count-1))
-                
-                # Try different methods to read the plane
-                if hasattr(cz, 'read_mosaic'):
-                    # Use read_mosaic with specific channel and z-slice
-                    try:
-                        # Try to read the specific plane directly
-                        plane = cz.read_mosaic(C=c, Z=z)
-                        plane = np.asarray(plane)
-                    except Exception as e:
-                        app.logger.warning(f'read_mosaic with C={c}, Z={z} failed: {e}, trying full read')
-                        # Fallback: read full data and extract plane
-                        try:
-                            full_data = cz.read_mosaic(C=c)  # Read specific channel
-                            full_data = np.asarray(full_data)
-                            if full_data.ndim >= 3:
-                                # Assume (Z, Y, X) format for single channel
-                                if z < full_data.shape[0]:
-                                    plane = full_data[z, :, :]
-                                else:
-                                    plane = full_data[0, :, :]  # Use first Z if requested Z doesn't exist
-                            else:
-                                plane = full_data
-                        except Exception as e2:
-                            app.logger.warning(f'read_mosaic fallback failed: {e2}, using default')
-                            # Last resort: try to read without specifying dimensions
-                            try:
-                                full_data = cz.read_mosaic()
-                                full_data = np.asarray(full_data)
-                                if full_data.ndim >= 4:
-                                    # Assume (C, Z, Y, X) format
-                                    c_idx = min(c, full_data.shape[0] - 1)
-                                    z_idx = min(z, full_data.shape[1] - 1)
-                                    plane = full_data[c_idx, z_idx, :, :]
-                                elif full_data.ndim == 3:
-                                    # Assume (Z, Y, X) or (C, Y, X) format
-                                    if z_count > 1:
-                                        z_idx = min(z, full_data.shape[0] - 1)
-                                        plane = full_data[z_idx, :, :]
-                                    else:
-                                        c_idx = min(c, full_data.shape[0] - 1)
-                                        plane = full_data[c_idx, :, :]
-                                else:
-                                    plane = full_data
-                            except Exception as e3:
-                                app.logger.error(f'All read_mosaic attempts failed: {e3}')
-                                raise e3
-                else:
-                    # If no suitable method, fall through to czifile
-                    raise AttributeError("No suitable read method found")
-                    
-            except Exception as e:
-                # If aics fails, fall through to czifile
-                app.logger.warning(f'aics methods failed: {e}, falling back to czifile')
-                raise e
-        else:
-            # Simple czifile approach - go back to basics
-            with CziFile(path) as czi:
-                arr = czi.asarray()
-                arr = np.asarray(arr)
-                shape = arr.shape
-                app.logger.info(f'CZI array shape: {shape}, ndim: {arr.ndim}')
-                
-                # Simple approach: just squeeze and take slices
-                plane = arr
-                
-                # Squeeze out all dimensions of size 1
-                plane = np.squeeze(plane)
-                app.logger.info(f'After squeeze: {plane.shape}')
-                
-                # If we still have more than 2 dimensions, take slices
-                while plane.ndim > 2:
-                    if plane.shape[0] > 1:
-                        # Take the requested slice from the first dimension
-                        if plane.ndim == 4 and plane.shape[0] == 4:  # First dimension is channels (4)
-                            plane = plane[c, ...]  # Take requested channel
-                            app.logger.info(f'Selected channel {c} from {plane.shape[0]} channels')
-                        elif plane.ndim == 3 and plane.shape[0] == 12:  # First dimension is something else (12)
-                            plane = plane[0, ...]  # Take first slice of this dimension
-                            app.logger.info(f'Selected first slice from dimension of size 12')
-                        else:
-                            plane = plane[0, ...]  # Take first slice
-                    else:
-                        plane = plane[0, ...]  # Remove dimension of size 1
-                    plane = np.squeeze(plane)
-                    app.logger.info(f'After dimension reduction: {plane.shape}')
-                
-                app.logger.info(f'Final plane shape: {plane.shape}')
 
-        # Ensure 2D and normalize, then apply channel colors
-        plane = np.squeeze(plane)
+    try:
+        with CziFile(path) as czi:
+            axes = czi.axes          # e.g. "BHSTCZYX0"
+            shape = czi.shape
+            app.logger.info(f"CZI axes: {axes}, shape: {shape}")
+
+            data = czi.asarray()
+            data = np.asarray(data)
+            app.logger.info(f"Array ndim: {data.ndim}, shape: {data.shape}")
+
+            # Find axis indices
+            axis_idx = {a: i for i, a in enumerate(axes)}
+            z_axis = axis_idx.get("Z", None)
+            c_axis = axis_idx.get("C", None)
+
+            # Build slicer
+            slicer = [0] * data.ndim  # start with all zeros
+            if c_axis is not None:
+                slicer[c_axis] = min(c, shape[c_axis] - 1)
+            if z_axis is not None:
+                slicer[z_axis] = min(z, shape[z_axis] - 1)
+
+            # Turn to slice objects for Y/X axes so we keep them fully
+            y_axis = axis_idx.get("Y", None)
+            x_axis = axis_idx.get("X", None)
+            if y_axis is not None:
+                slicer[y_axis] = slice(None)
+            if x_axis is not None:
+                slicer[x_axis] = slice(None)
+
+            plane = data[tuple(slicer)]
+            plane = np.squeeze(plane)
+            app.logger.info(f"Extracted plane shape: {plane.shape}")
+
+        # Normalize
         if plane.dtype != np.uint8:
-            pmin = float(np.min(plane)) if np.size(plane)>0 else 0.0
-            pmax = float(np.max(plane)) if np.size(plane)>0 else 0.0
-            app.logger.info(f'Channel {c}, Z {z}: min={pmin:.2f}, max={pmax:.2f}, mean={np.mean(plane):.2f}')
+            pmin, pmax = float(plane.min()), float(plane.max())
             if pmax > pmin:
-                plane = (255.0 * (plane - pmin) / (pmax - pmin)).astype(np.uint8)
+                plane = ((plane - pmin) / (pmax - pmin) * 255).astype(np.uint8)
             else:
                 plane = np.zeros_like(plane, dtype=np.uint8)
-        
-        # Apply channel colors
+
+        # Color map per channel
         if plane.ndim == 2:
-            # Create RGB image
-            colored_plane = np.zeros((plane.shape[0], plane.shape[1], 3), dtype=np.uint8)
-            
-            if c == 0:  # Channel 1 - Green
-                colored_plane[:, :, 1] = plane  # Green channel
-            elif c == 1:  # Channel 2 - Red  
-                colored_plane[:, :, 0] = plane  # Red channel
-            elif c == 2:  # Channel 3 - Blue
-                colored_plane[:, :, 2] = plane  # Blue channel
-            elif c == 3:  # Channel 4 - White (all channels)
-                colored_plane[:, :, 0] = plane  # Red
-                colored_plane[:, :, 1] = plane  # Green  
-                colored_plane[:, :, 2] = plane  # Blue
-            else:  # Default to grayscale
-                colored_plane[:, :, 0] = plane
-                colored_plane[:, :, 1] = plane
-                colored_plane[:, :, 2] = plane
-                
-            plane = colored_plane
+            rgb = np.zeros((plane.shape[0], plane.shape[1], 3), dtype=np.uint8)
+            if c == 0:
+                rgb[..., 1] = plane  # green
+            elif c == 1:
+                rgb[..., 0] = plane  # red
+            elif c == 2:
+                rgb[..., 2] = plane  # blue
+            elif c == 3:
+                rgb[:] = plane[..., None]  # white
+            plane = rgb
 
         out_path = os.path.join(UPLOAD_DIR, f"{id}_z{z}_c{c}.png")
         imageio.imwrite(out_path, plane)
         return send_file(out_path, mimetype='image/png')
+
     except Exception as e:
         tb = traceback.format_exc()
         app.logger.error('slice error: %s', tb)
         return jsonify({'error': str(e), 'trace': tb}), 500
 
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5001, debug=True)
+    
