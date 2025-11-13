@@ -13,7 +13,7 @@ export default function AnalysisViewer() {
     const fetchAnalysisImage = async () => {
       setLoading(true);
       try {
-        const r = await fetch(`/api/analyze_img_combined/${id}`);
+        const r = await fetch(`https://tronmachine-backend.onrender.com/api/analyze_img_combined/${id}`);
         if (!r.ok) throw new Error(`Failed to fetch analysis image (${r.status})`);
         const blob = await r.blob();
         const url = URL.createObjectURL(blob);

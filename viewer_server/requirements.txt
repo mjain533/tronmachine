@@ -7,3 +7,4 @@ aicspylibczi
 Werkzeug
 opencv-python
 Pillow
+gunicorn

@@ -27,7 +27,7 @@ export default function CziViewer() {
       setLoading(true);
       try {
         console.debug("[viewer] fetching metadata for", id);
-        const r = await fetch(`/api/metadata/${id}`);
+        const r = await fetch(`https://tronmachine-backend.onrender.com/api/metadata/${id}`);
         if (!r.ok) throw new Error(`metadata ${r.status}`);
         const j = await r.json();
         setMeta(j);
@@ -49,7 +49,7 @@ export default function CziViewer() {
       setLoading(true);
       setError(null);
       try {
-        const r = await fetch(`/api/slice/${id}?z=${zIndex}&c=${channel}`);
+        const r = await fetch(`https://tronmachine-backend.onrender.com/api/slice/${id}?z=${zIndex}&c=${channel}`);
         if (!r.ok) {
           const txt = await r.text().catch(() => null);
           throw new Error(`slice fetch ${r.status} ${txt || ""}`);
@@ -83,7 +83,7 @@ export default function CziViewer() {
     }
     try {
       setLoading(true);
-      const r1 = await fetch("/api/slices/keep", {
+      const r1 = await fetch("https://tronmachine-backend.onrender.com/api/slices/keep", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id, keepRange: [start, end], applyAll }),
@@ -92,7 +92,7 @@ export default function CziViewer() {
       if (j1.error) throw new Error(j1.error);
       setKeptSlices({ start, end });
 
-      const r2 = await fetch(`/api/preprocess/${id}/batch?c=${channel}`);
+      const r2 = await fetch(`https://tronmachine-backend.onrender.com/api/preprocess/${id}/batch?c=${channel}`);
       const j2 = await r2.json();
       if (j2.error) throw new Error(j2.error);
       alert(`Preprocessing complete for ${start}–${end}`);
@@ -116,7 +116,7 @@ export default function CziViewer() {
 
     // Call the Flask /api/analyze endpoint
     const r = await fetch(
-      `/api/analyze/${id}?c=${channel}`
+      `https://tronmachine-backend.onrender.com/api/analyze/${id}?c=${channel}`
     );
     const j = await r.json();
 
